@@ -42,6 +42,64 @@ function buildMetrics(summary) {
   };
 }
 
+function stripJsonFence(text) {
+  return String(text || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+}
+
+function fallbackSummary(metrics, reason) {
+  const failureRate = metrics.http_failure_rate_percent;
+  const p95 = metrics.p95_response_time_ms;
+
+  return {
+    executive_summary:
+      `AI summary tidak tersedia. Laporan menggunakan fallback rule-based. Total request ${metrics.total_http_requests}, success rate ${metrics.http_success_rate_percent}%, failure rate ${failureRate}%, dan P95 response time ${p95} ms.`,
+    insights: [
+      {
+        area: "AI Summary",
+        status: "Fallback",
+        finding: `Qwen API gagal atau tidak mengembalikan JSON valid. Reason: ${reason}`,
+        recommendation: "Periksa DASHSCOPE_API_KEY, QWEN_BASE_URL, QWEN_MODEL, dan response API di GitHub Actions log.",
+      },
+      {
+        area: "Latency",
+        status: p95 < 1000 ? "Sangat Baik" : p95 < 3000 ? "Normal" : p95 < 6000 ? "Perlu Dipantau" : "Melebihi Threshold",
+        finding: `P95 response time tercatat ${p95} ms.`,
+        recommendation: p95 < 6000 ? "Latency masih berada dalam batas threshold." : "Perlu investigasi bottleneck aplikasi, jaringan, atau server.",
+      },
+      {
+        area: "Status Code Breakdown",
+        status:
+          metrics.total_http_requests > 0 &&
+          metrics.status_200 === 0 &&
+          metrics.status_429 === 0 &&
+          metrics.status_5xx === 0 &&
+          metrics.status_other === 0
+            ? "Tidak Lengkap"
+            : "Tercatat",
+        finding:
+          metrics.total_http_requests > 0 &&
+          metrics.status_200 === 0 &&
+          metrics.status_429 === 0 &&
+          metrics.status_5xx === 0 &&
+          metrics.status_other === 0
+            ? "Total request tercatat, tetapi seluruh breakdown status code masih 0."
+            : "Breakdown status code tersedia.",
+        recommendation: "Validasi custom counter status_200, status_429, status_500, dan status_other pada script k6.",
+      },
+    ],
+    risk_notes: [
+      "AI summary gagal dibuat, sehingga report memakai fallback rule-based.",
+      "Jika status code breakdown bernilai 0 sementara request dan failure rate terisi, klasifikasi failure belum akurat.",
+    ],
+    conclusion:
+      `Pengujian performance selesai dengan ${metrics.total_http_requests} request dan ${metrics.total_vus} VUs. P95 response time sebesar ${p95} ms. Failure rate tercatat ${failureRate}%. Hasil ini dapat digunakan sebagai baseline automation, namun klasifikasi status code perlu dipastikan agar analisis failure lebih akurat.`,
+  };
+}
+
 async function main() {
   const summaryPath = getArg("summary");
   const outputPath = getArg("output");
@@ -51,26 +109,28 @@ async function main() {
     process.exit(1);
   }
 
-  if (!process.env.OPENAI_API_KEY) {
-    console.error("Missing OPENAI_API_KEY environment variable");
-    process.exit(1);
-  }
+  const apiKey = process.env.DASHSCOPE_API_KEY;
+  const baseUrl = process.env.QWEN_BASE_URL || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+  const model = process.env.QWEN_MODEL || "qwen-plus";
 
   const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
   const metrics = buildMetrics(summary);
 
-  /**
-   * PROMPT AI DI SINI
-   * Ubah bagian ini jika ingin mengatur gaya analisis, aturan threshold,
-   * atau format bahasa laporan.
-   */
+  if (!apiKey) {
+    console.warn("Missing DASHSCOPE_API_KEY. Writing fallback AI summary.");
+    fs.writeFileSync(outputPath, JSON.stringify(fallbackSummary(metrics, "Missing DASHSCOPE_API_KEY"), null, 2));
+    return;
+  }
+
   const systemPrompt = `
 Anda adalah Senior Software Quality Assurance Engineer dengan pengalaman performance testing.
-Tugas Anda adalah membuat analisis hasil performance test k6 secara objektif, ringkas, dan berbasis data.
 
-Aturan penting:
+Tugas Anda:
+Membuat analisis hasil performance test k6 secara objektif, ringkas, dan berbasis data.
+
+Aturan:
 - Jangan mengarang angka.
-- Semua insight harus berdasarkan data yang diberikan.
+- Semua insight harus berdasarkan data metrics yang diberikan.
 - Jika status 200, 429, 5xx, dan other bernilai 0 tetapi total request lebih dari 0, nyatakan sebagai anomali pencatatan status code.
 - Jika status 429 = 0, jangan menyimpulkan rate limiting aktif.
 - Jika failure rate tinggi tetapi status 429 = 0, sebutkan bahwa penyebab failure belum terklasifikasi.
@@ -81,25 +141,42 @@ Aturan penting:
 - Jika status 5xx = 0, sistem stabil dari sisi server error.
 - Gunakan Bahasa Indonesia formal.
 - Persentase tidak perlu decimal.
-- Output harus berupa JSON valid.
+- Output harus JSON valid saja, tanpa markdown, tanpa code fence.
 `;
 
   const userPrompt = `
 Buat executive summary, insight dan rekomendasi, risk notes, dan kesimpulan untuk laporan performance test berikut.
 
+Format output harus persis JSON seperti ini:
+{
+  "executive_summary": "string",
+  "insights": [
+    {
+      "area": "string",
+      "status": "string",
+      "finding": "string",
+      "recommendation": "string"
+    }
+  ],
+  "risk_notes": ["string"],
+  "conclusion": "string"
+}
+
 Data metrics:
 ${JSON.stringify(metrics, null, 2)}
 `;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      input: [
+      model,
+      messages: [
         {
           role: "system",
           content: systemPrompt,
@@ -109,65 +186,54 @@ ${JSON.stringify(metrics, null, 2)}
           content: userPrompt,
         },
       ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "performance_test_ai_summary",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              executive_summary: {
-                type: "string",
-              },
-              insights: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    area: { type: "string" },
-                    status: { type: "string" },
-                    finding: { type: "string" },
-                    recommendation: { type: "string" },
-                  },
-                  required: ["area", "status", "finding", "recommendation"],
-                },
-              },
-              risk_notes: {
-                type: "array",
-                items: { type: "string" },
-              },
-              conclusion: {
-                type: "string",
-              },
-            },
-            required: ["executive_summary", "insights", "risk_notes", "conclusion"],
-          },
-        },
-      },
+      temperature: 0.2,
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("OpenAI API error:", errorText);
-    process.exit(1);
+    console.error("Qwen API error:", errorText);
+
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(fallbackSummary(metrics, `Qwen API error: ${response.status}`), null, 2)
+    );
+
+    console.log(`Fallback AI summary generated: ${outputPath}`);
+    return;
   }
 
   const result = await response.json();
+  const content = result?.choices?.[0]?.message?.content;
 
-  const outputText = result.output_text;
-
-  if (!outputText) {
-    console.error("AI response does not contain output_text");
+  if (!content) {
+    console.error("Qwen response does not contain choices[0].message.content");
     console.error(JSON.stringify(result, null, 2));
-    process.exit(1);
+
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(fallbackSummary(metrics, "Empty Qwen response content"), null, 2)
+    );
+
+    console.log(`Fallback AI summary generated: ${outputPath}`);
+    return;
   }
 
-  fs.writeFileSync(outputPath, outputText);
-  console.log(`AI summary generated: ${outputPath}`);
+  try {
+    const parsed = JSON.parse(stripJsonFence(content));
+    fs.writeFileSync(outputPath, JSON.stringify(parsed, null, 2));
+    console.log(`Qwen AI summary generated: ${outputPath}`);
+  } catch (error) {
+    console.error("Failed to parse Qwen JSON response:");
+    console.error(content);
+
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(fallbackSummary(metrics, "Invalid JSON from Qwen"), null, 2)
+    );
+
+    console.log(`Fallback AI summary generated: ${outputPath}`);
+  }
 }
 
 main().catch((error) => {

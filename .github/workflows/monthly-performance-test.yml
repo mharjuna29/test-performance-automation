@@ -192,9 +192,12 @@ jobs:
           fi
           cp "$HTML_FILE" "reports/$MONTH/stress-test-summary.html"
 
-      - name: Generate AI summary
+      - name: Generate AI summary with Qwen
+        continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          QWEN_BASE_URL: ${{ secrets.QWEN_BASE_URL }}
+          QWEN_MODEL: ${{ secrets.QWEN_MODEL }}
         run: |
           node scripts/generate-ai-summary.js \
             --summary reports/$MONTH/k6-summary.json \
