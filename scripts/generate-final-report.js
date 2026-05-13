@@ -46,6 +46,20 @@ function monthLabel(month) {
   return `${names[mm] || month} ${year}`;
 }
 
+function normalizeRate(value) {
+  const number = Number(value || 0);
+
+  if (number > 1) {
+    return number / 100;
+  }
+
+  return number;
+}
+
+function formatRate(value) {
+  return `${(normalizeRate(value) * 100).toFixed(2)}%`;
+}
+
 /**
  * k6 --summary-export usually stores metrics like:
  * summary.metrics.http_reqs.values.count
@@ -121,12 +135,13 @@ function buildMetrics(summary, htmlReport) {
   const totalRequests = getMetric(summary, "http_reqs", "count", 0);
   const requestsPerSecond = getMetric(summary, "http_reqs", "rate", 0);
 
-  const failureRateRaw = getMetric(summary, "http_req_failed", "rate", 0);
+  const failureRateRaw = normalizeRate(getMetric(summary, "http_req_failed", "rate", 0));
   const successRateRaw = 1 - failureRateRaw;
 
   const status200 = getMetric(summary, "status_200", "count", 0);
   const status429 = getMetric(summary, "status_429", "count", 0);
   const status5xx = getMetric(summary, "status_500", "count", 0);
+  const statusOther = getMetric(summary, "status_other", "count", 0);
 
   const avgResponseTime = getMetric(summary, "http_req_duration", "avg", 0);
   const p95ResponseTime = getMetric(summary, "http_req_duration", "p(95)", 0);
@@ -148,6 +163,7 @@ function buildMetrics(summary, htmlReport) {
     status200,
     status429,
     status5xx,
+    statusOther,
     avgResponseTime,
     p95ResponseTime,
     maxResponseTime,
@@ -391,11 +407,12 @@ async function main() {
       <tr><td>Total Virtual Users (VUs)</td><td>${formatNumber(metrics.totalVus)} VUs</td></tr>
       <tr><td>Total HTTP Requests</td><td>${formatNumber(metrics.totalRequests)}</td></tr>
       <tr><td>Requests per Second</td><td>${Number(metrics.requestsPerSecond || 0).toFixed(2)} req/s</td></tr>
-      <tr><td>HTTP Success Rate</td><td>${formatPercentFromRate(metrics.successRateRaw)}</td></tr>
-      <tr><td>HTTP Failure Rate</td><td>${formatPercentFromRate(metrics.failureRateRaw)}</td></tr>
+      <tr><td>HTTP Success Rate</td><td>${formatRate(metrics.successRateRaw)}</td></tr>
+      <tr><td>HTTP Failure Rate</td><td>${formatRate(metrics.failureRateRaw)}</td></tr>
       <tr><td>Status 200</td><td>${formatNumber(metrics.status200)}</td></tr>
       <tr><td>Status 429 Rate Limited</td><td>${formatNumber(metrics.status429)}</td></tr>
       <tr><td>Status 5xx Server Error</td><td>${formatNumber(metrics.status5xx)}</td></tr>
+      <tr><td>Status Other / Network Error</td><td>${formatNumber(metrics.statusOther)}</td></tr>
       <tr><td>Average Response Time</td><td>${formatMs(metrics.avgResponseTime)}</td></tr>
       <tr><td>P95 Response Time</td><td>${formatMs(metrics.p95ResponseTime)}</td></tr>
       <tr><td>Max Response Time</td><td>${formatMs(metrics.maxResponseTime)}</td></tr>
