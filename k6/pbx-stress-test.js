@@ -7,7 +7,7 @@ const loginFailure = new Counter('login_failure');
 const status200 = new Counter('status_200');
 const status429 = new Counter('status_429');
 const status500 = new Counter('status_500');
-const statusOther = new Counter('status_other');
+const statusOther = new Counter('status_other'); 
 
 const TEST_PROFILE = __ENV.TEST_PROFILE || 'dummy';
 
@@ -95,28 +95,53 @@ export default function () {
     },
   });
 
-  switch (response.status) {
-    case 200:
-      status200.add(1);
-      break;
-    case 429:
-      status429.add(1);
-      break;
-    case 500:
-    case 502:
-    case 503:
-    case 504:
-      status500.add(1);
-      break;
-    default:
-      statusOther.add(1);
-  }
+  // switch (response.status) {
+  //   case 200:
+  //     status200.add(1);
+  //     break;
+  //   case 429:
+  //     status429.add(1);
+  //     break;
+  //   case 500:
+  //   case 502:
+  //   case 503:
+  //   case 504:
+  //     status500.add(1);
+  //     break;
+  //   default:
+  //     statusOther.add(1);
+  // }
 
   if (response.status === 200 && isSuccess) {
     loginSuccess.add(1);
   } else {
     loginFailure.add(1);
   }
+  
+  if (response && response.status) {
+  switch (response.status) {
+    case 200:
+      status200.add(1);
+      break;
+
+    case 429:
+      status429.add(1);
+      break;
+
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      status500.add(1);
+      break;
+
+    default:
+      statusOther.add(1);
+      break;
+  }
+} else {
+  statusOther.add(1);
+}
 
   sleep(Math.random() * 3 + 2);
 }
