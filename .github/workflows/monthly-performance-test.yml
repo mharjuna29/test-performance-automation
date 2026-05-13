@@ -14,10 +14,17 @@ jobs:
     env:
       TZ: Asia/Jakarta
       REPORT_RECIPIENTS: testerdeggan456@gmail.com
+
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_PORT: ${{ secrets.SSH_PORT }}
       SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
       DUMMY_API_PORT: ${{ secrets.DUMMY_API_PORT }}
+
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
 
     steps:
       - name: Checkout repository
@@ -40,6 +47,34 @@ jobs:
           else
             echo "Not first week of month. Skipping without failure."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate required secrets
+        run: |
+          missing=0
+
+          check_secret() {
+            if [ -z "${!1}" ]; then
+              echo "Missing required secret: $1"
+              missing=1
+            else
+              echo "$1 is set"
+            fi
+          }
+
+          check_secret SSH_HOST
+          check_secret SSH_PORT
+          check_secret SSH_USERNAME
+          check_secret DUMMY_API_PORT
+          check_secret SMTP_SERVER
+          check_secret SMTP_PORT
+          check_secret SMTP_USERNAME
+          check_secret SMTP_PASSWORD
+          check_secret SMTP_FROM
+
+          if [ "$missing" -eq 1 ]; then
+            echo "One or more required secrets are missing."
+            exit 1
           fi
 
       - name: Prepare report directory
@@ -144,17 +179,38 @@ jobs:
           name: laporan-performance-pbx-${{ env.MONTH }}
           path: reports/${{ env.MONTH }}/
 
+      # - name: Send success email
+      #   if: steps.first_week.outputs.should_run == 'true' && success()
+      #   uses: dawidd6/action-send-mail@v3
+      #   with:
+      #     server_address: ${{ secrets.SMTP_SERVER }}
+      #     server_port: ${{ secrets.SMTP_PORT }}
+      #     username: ${{ secrets.SMTP_USERNAME }}
+      #     password: ${{ secrets.SMTP_PASSWORD }}
+      #     subject: SUCCESS - Monthly PBX Performance Test ${{ env.MONTH }}
+      #     to: testerdeggan456@gmail.com
+      #     from: ${{ secrets.SMTP_FROM }}
+      #     body: |
+      #       Monthly PBX Performance Test selesai tanpa kendala.
+
+      #       Periode: ${{ env.MONTH }}
+      #       Target: Dummy website pada server testing via SSH
+      #       Jadwal: Minggu pertama setiap bulan pukul 01:00 WIB
+
+      #       Laporan PDF terlampir dan artifact tersedia di GitHub Actions.
+      #     attachments: reports/${{ env.MONTH }}/laporan-pekerjaan-ms-pbx-${{ env.MONTH }}.pdf
+
       - name: Send success email
-        if: steps.first_week.outputs.should_run == 'true' && success()
+        if: success()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: SUCCESS - Monthly PBX Performance Test ${{ env.MONTH }}
-          to: testerdeggan456@gmail.com
-          from: ${{ secrets.SMTP_FROM }}
+          server_address: ${{ env.SMTP_SERVER }}
+          server_port: ${{ env.SMTP_PORT }}
+          username: ${{ env.SMTP_USERNAME }}
+          password: ${{ env.SMTP_PASSWORD }}
+          subject: "SUCCESS - Monthly PBX Performance Test ${{ env.MONTH }}"
+          to: ${{ env.REPORT_RECIPIENTS }}
+          from: ${{ env.SMTP_FROM }}
           body: |
             Monthly PBX Performance Test selesai tanpa kendala.
 
@@ -162,22 +218,39 @@ jobs:
             Target: Dummy website pada server testing via SSH
             Jadwal: Minggu pertama setiap bulan pukul 01:00 WIB
 
-            Laporan PDF terlampir dan artifact tersedia di GitHub Actions.
+            Laporan PDF terlampir.
           attachments: reports/${{ env.MONTH }}/laporan-pekerjaan-ms-pbx-${{ env.MONTH }}.pdf
 
       - name: Send failure email
-        if: steps.first_week.outputs.should_run == 'true' && failure()
+        if: failure()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: FAILED - Monthly PBX Performance Test ${{ env.MONTH }}
-          to: testerdeggan456@gmail.com
-          from: ${{ secrets.SMTP_FROM }}
+          server_address: ${{ env.SMTP_SERVER }}
+          server_port: ${{ env.SMTP_PORT }}
+          username: ${{ env.SMTP_USERNAME }}
+          password: ${{ env.SMTP_PASSWORD }}
+          subject: "FAILED - Monthly PBX Performance Test ${{ env.MONTH }}"
+          to: ${{ env.REPORT_RECIPIENTS }}
+          from: ${{ env.SMTP_FROM }}
           body: |
             Monthly PBX Performance Test gagal dijalankan.
 
             Periode: ${{ env.MONTH }}
             Silakan cek log GitHub Actions untuk detail error.
+
+      # - name: Send failure email
+      #   if: steps.first_week.outputs.should_run == 'true' && failure()
+      #   uses: dawidd6/action-send-mail@v3
+      #   with:
+      #     server_address: ${{ secrets.SMTP_SERVER }}
+      #     server_port: ${{ secrets.SMTP_PORT }}
+      #     username: ${{ secrets.SMTP_USERNAME }}
+      #     password: ${{ secrets.SMTP_PASSWORD }}
+      #     subject: FAILED - Monthly PBX Performance Test ${{ env.MONTH }}
+      #     to: testerdeggan456@gmail.com
+      #     from: ${{ secrets.SMTP_FROM }}
+      #     body: |
+      #       Monthly PBX Performance Test gagal dijalankan.
+
+      #       Periode: ${{ env.MONTH }}
+      #       Silakan cek log GitHub Actions untuk detail error.
