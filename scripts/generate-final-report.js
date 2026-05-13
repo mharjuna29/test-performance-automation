@@ -1,6 +1,6 @@
-const fs = require('fs');
-const path = require('path');
-const puppeteer = require('puppeteer');
+const fs = require("fs");
+const path = require("path");
+const puppeteer = require("puppeteer");
 
 function getArg(name, fallback = null) {
   const index = process.argv.indexOf(`--${name}`);
@@ -10,76 +10,279 @@ function getArg(name, fallback = null) {
 
 function readFileSafe(filePath) {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    if (!filePath) return "File not available.";
+    return fs.readFileSync(filePath, "utf8");
   } catch (_) {
-    return 'File not available.';
+    return "File not available.";
   }
-}
-
-function metric(summary, name, value, fallback = 0) {
-  return summary.metrics?.[name]?.values?.[value] ?? fallback;
-}
-
-function pct(value) {
-  return `${(Number(value || 0) * 100).toFixed(2)}%`;
-}
-
-function mb(bytes) {
-  return `${(Number(bytes || 0) / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function escapeHtml(input) {
-  return String(input)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function monthLabel(month) {
-  const [year, mm] = month.split('-');
+  const [year, mm] = month.split("-");
   const names = {
-    '01': 'JANUARI', '02': 'FEBRUARI', '03': 'MARET', '04': 'APRIL',
-    '05': 'MEI', '06': 'JUNI', '07': 'JULI', '08': 'AGUSTUS',
-    '09': 'SEPTEMBER', '10': 'OKTOBER', '11': 'NOVEMBER', '12': 'DESEMBER',
+    "01": "JANUARI",
+    "02": "FEBRUARI",
+    "03": "MARET",
+    "04": "APRIL",
+    "05": "MEI",
+    "06": "JUNI",
+    "07": "JULI",
+    "08": "AGUSTUS",
+    "09": "SEPTEMBER",
+    "10": "OKTOBER",
+    "11": "NOVEMBER",
+    "12": "DESEMBER",
   };
+
   return `${names[mm] || month} ${year}`;
 }
 
+/**
+ * k6 --summary-export usually stores metrics like:
+ * summary.metrics.http_reqs.values.count
+ * summary.metrics.http_req_duration.values["p(95)"]
+ */
+function getMetric(summary, metricName, valueName, fallback = 0) {
+  const value = summary?.metrics?.[metricName]?.values?.[valueName];
+
+  if (value === undefined || value === null || Number.isNaN(Number(value))) {
+    return fallback;
+  }
+
+  return Number(value);
+}
+
+function formatNumber(value, digits = 0) {
+  const number = Number(value || 0);
+
+  return number.toLocaleString("id-ID", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function formatMs(value) {
+  return `${formatNumber(Math.round(Number(value || 0)))} ms`;
+}
+
+function formatPercentFromRate(rate) {
+  return `${(Number(rate || 0) * 100).toFixed(2)}%`;
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(2)}%`;
+}
+
+function formatMB(bytes) {
+  return `${(Number(bytes || 0) / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function parseNumberFromText(text) {
+  if (!text) return 0;
+
+  const cleaned = String(text)
+    .replace(/[^\d.,-]/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+
+  const parsed = Number(cleaned);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Fallback parser dari HTML report.
+ * Dipakai jika k6-summary.json terbaca tetapi metric bernilai 0 semua.
+ */
+function extractValueFromHtml(html, label) {
+  if (!html) return null;
+
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const regex = new RegExp(
+    `<span>\\s*${escapedLabel}\\s*:?\\s*<\\/span>\\s*<span[^>]*>\\s*([^<]+)\\s*<\\/span>`,
+    "i"
+  );
+
+  const match = html.match(regex);
+  return match ? match[1].trim() : null;
+}
+
+function buildMetrics(summary, htmlReport) {
+  const totalVus = getMetric(summary, "vus_max", "max", 0);
+  const totalRequests = getMetric(summary, "http_reqs", "count", 0);
+  const requestsPerSecond = getMetric(summary, "http_reqs", "rate", 0);
+
+  const failureRateRaw = getMetric(summary, "http_req_failed", "rate", 0);
+  const successRateRaw = 1 - failureRateRaw;
+
+  const status200 = getMetric(summary, "status_200", "count", 0);
+  const status429 = getMetric(summary, "status_429", "count", 0);
+  const status5xx = getMetric(summary, "status_500", "count", 0);
+
+  const avgResponseTime = getMetric(summary, "http_req_duration", "avg", 0);
+  const p95ResponseTime = getMetric(summary, "http_req_duration", "p(95)", 0);
+  const maxResponseTime = getMetric(summary, "http_req_duration", "max", 0);
+
+  const dataReceived = getMetric(summary, "data_received", "count", 0);
+  const dataSent = getMetric(summary, "data_sent", "count", 0);
+
+  const avgConnectionTime = getMetric(summary, "http_req_connecting", "avg", 0);
+  const avgTlsHandshake = getMetric(summary, "http_req_tls_handshaking", "avg", 0);
+  const avgWaitingTime = getMetric(summary, "http_req_waiting", "avg", 0);
+
+  const parsed = {
+    totalVus,
+    totalRequests,
+    requestsPerSecond,
+    successRateRaw,
+    failureRateRaw,
+    status200,
+    status429,
+    status5xx,
+    avgResponseTime,
+    p95ResponseTime,
+    maxResponseTime,
+    dataReceived,
+    dataSent,
+    avgConnectionTime,
+    avgTlsHandshake,
+    avgWaitingTime,
+  };
+
+  /**
+   * Jika summary JSON tidak terbaca dengan benar, fallback ke HTML report.
+   */
+  const isSummaryEmpty =
+    parsed.totalRequests === 0 &&
+    parsed.status200 === 0 &&
+    parsed.status429 === 0 &&
+    parsed.avgResponseTime === 0 &&
+    parsed.p95ResponseTime === 0;
+
+  if (!isSummaryEmpty || !htmlReport) {
+    return parsed;
+  }
+
+  console.log("k6-summary.json metrics look empty. Trying fallback parse from HTML report.");
+
+  const htmlTotalVus = extractValueFromHtml(htmlReport, "Total VUs");
+  const htmlTotalIterations = extractValueFromHtml(htmlReport, "Total Iterations");
+  const htmlTotalRequests = extractValueFromHtml(htmlReport, "Total HTTP Requests");
+  const htmlRps = extractValueFromHtml(htmlReport, "Requests per Second");
+  const htmlSuccessRate = extractValueFromHtml(htmlReport, "HTTP Success Rate");
+  const htmlFailureRate = extractValueFromHtml(htmlReport, "HTTP Failure Rate");
+
+  const htmlStatus200 = extractValueFromHtml(htmlReport, "Status 200 (Success)");
+  const htmlStatus429 = extractValueFromHtml(htmlReport, "Status 429 (Rate Limited)");
+  const htmlStatus5xx = extractValueFromHtml(htmlReport, "Status 5xx (Server Error)");
+
+  const htmlAvgResponse = extractValueFromHtml(htmlReport, "Avg Response Time");
+  const htmlP95 = extractValueFromHtml(htmlReport, "P95 Response Time");
+  const htmlMaxResponse = extractValueFromHtml(htmlReport, "Max Response Time");
+
+  const htmlDataReceived = extractValueFromHtml(htmlReport, "Data Received");
+  const htmlDataSent = extractValueFromHtml(htmlReport, "Data Sent");
+
+  const htmlAvgConnection = extractValueFromHtml(htmlReport, "Avg Connection Time");
+  const htmlAvgTls = extractValueFromHtml(htmlReport, "Avg TLS Handshake");
+  const htmlAvgWaiting = extractValueFromHtml(htmlReport, "Avg Waiting Time");
+
+  const fallbackTotalRequests =
+    parseNumberFromText(htmlTotalRequests) || parseNumberFromText(htmlTotalIterations);
+
+  const fallbackSuccessPercent = parseNumberFromText(htmlSuccessRate);
+  const fallbackFailurePercent = parseNumberFromText(htmlFailureRate);
+
+  return {
+    totalVus: parseNumberFromText(htmlTotalVus),
+    totalRequests: fallbackTotalRequests,
+    requestsPerSecond: parseNumberFromText(htmlRps),
+
+    successRateRaw: fallbackSuccessPercent / 100,
+    failureRateRaw: fallbackFailurePercent / 100,
+
+    status200: parseNumberFromText(htmlStatus200),
+    status429: parseNumberFromText(htmlStatus429),
+    status5xx: parseNumberFromText(htmlStatus5xx),
+
+    avgResponseTime: parseNumberFromText(htmlAvgResponse),
+    p95ResponseTime: parseNumberFromText(htmlP95),
+    maxResponseTime: parseNumberFromText(htmlMaxResponse),
+
+    dataReceived: parseNumberFromText(htmlDataReceived) * 1024 * 1024,
+    dataSent: parseNumberFromText(htmlDataSent) * 1024 * 1024,
+
+    avgConnectionTime: parseNumberFromText(htmlAvgConnection),
+    avgTlsHandshake: parseNumberFromText(htmlAvgTls),
+    avgWaitingTime: parseNumberFromText(htmlAvgWaiting),
+  };
+}
+
+function getProfileFromSummary(summary) {
+  const maxVus = getMetric(summary, "vus_max", "max", 0);
+
+  if (maxVus <= 10) {
+    return "dummy";
+  }
+
+  return "production";
+}
+
 async function main() {
-  const month = getArg('month');
-  const runDate = getArg('run-date', new Date().toISOString());
-  const summaryPath = getArg('summary');
-  const cpuRamPath = getArg('cpu-ram');
-  const storagePath = getArg('storage');
-  const optimizePath = getArg('optimize');
-  const output = getArg('output');
+  const month = getArg("month");
+  const runDate = getArg("run-date", new Date().toISOString());
+  const summaryPath = getArg("summary");
+  const htmlReportPath = getArg("html-report");
+  const cpuRamPath = getArg("cpu-ram");
+  const storagePath = getArg("storage");
+  const optimizePath = getArg("optimize");
+  const output = getArg("output");
 
   if (!month || !summaryPath || !output) {
-    console.error('Missing required args: --month, --summary, --output');
+    console.error("Missing required args: --month, --summary, --output");
     process.exit(1);
   }
 
-  const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+  let summary = {};
 
-  const totalRequests = metric(summary, 'http_reqs', 'count');
-  const status200 = metric(summary, 'status_200', 'count');
-  const status429 = metric(summary, 'status_429', 'count');
-  const status5xx = metric(summary, 'status_500', 'count');
-  const failureRate = metric(summary, 'http_req_failed', 'rate');
-  const p95 = metric(summary, 'http_req_duration', 'p(95)');
-  const maxResponse = metric(summary, 'http_req_duration', 'max');
-  const avgResponse = metric(summary, 'http_req_duration', 'avg');
-  const rps = metric(summary, 'http_reqs', 'rate');
+  try {
+    summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+  } catch (error) {
+    console.error(`Failed to read k6 summary JSON: ${summaryPath}`);
+    console.error(error);
+    summary = {};
+  }
 
-  const stabilityStatus = status5xx === 0 ? 'Stabil' : 'Perlu Investigasi';
-  const latencyStatus = p95 < 6000 ? 'Dalam batas wajar' : 'Melebihi batas';
-  const rateLimitStatus = status429 > 0 ? 'Rate limiting aktif' : 'Rate limiting tidak terdeteksi';
+  const htmlReport = readFileSafe(htmlReportPath);
+  const metrics = buildMetrics(summary, htmlReport);
+  const profile = getProfileFromSummary(summary);
 
-  const conclusion = status5xx === 0 && p95 < 6000
-    ? 'Pengujian performance berhasil dijalankan. Sistem dummy tetap merespons tanpa server error 5xx, dan mekanisme rate limiting berhasil disimulasikan melalui status 429. Hasil ini menunjukkan pipeline automation, monitoring, report generation, dan email notification sudah berjalan sesuai rancangan.'
-    : 'Pengujian performance selesai, namun terdapat metrik yang perlu ditinjau lebih lanjut. Tim perlu memeriksa response time, error 5xx, dan log server sebelum workflow digunakan untuk target production.';
+  console.log("Available k6 metrics:", Object.keys(summary.metrics || {}));
+  console.log("Parsed report metrics:", metrics);
+
+  const stabilityStatus = metrics.status5xx === 0 ? "Stabil" : "Perlu Investigasi";
+  const latencyStatus = metrics.p95ResponseTime < 6000 ? "Dalam batas wajar" : "Melebihi batas";
+  const rateLimitStatus =
+    metrics.status429 > 0 ? "Rate limiting aktif" : "Rate limiting tidak terdeteksi";
+
+  const targetLoad =
+    profile === "dummy"
+      ? "0 → 5 → 10 → 0 VUs dalam ±70 detik"
+      : "0 → 100 → 200 → 300 → 0 VUs dalam ±23 menit";
+
+  const conclusion =
+    metrics.status5xx === 0 && metrics.p95ResponseTime < 6000
+      ? "Pengujian performance berhasil dijalankan. Sistem dummy tetap merespons tanpa server error 5xx, dan mekanisme rate limiting berhasil disimulasikan melalui status 429. Hasil ini menunjukkan pipeline automation, monitoring, report generation, dan email notification sudah berjalan sesuai rancangan."
+      : "Pengujian performance selesai, namun terdapat metrik yang perlu ditinjau lebih lanjut. Tim perlu memeriksa response time, error 5xx, dan log server sebelum workflow digunakan untuk target production.";
 
   const html = `<!DOCTYPE html>
 <html>
@@ -171,13 +374,13 @@ async function main() {
       <li>Environment: Testing Server / Dummy Website</li>
       <li>Tool Used: k6</li>
       <li>API Tested: /api/login</li>
-      <li>Target Load: 0 → 100 → 200 → 300 → 0 VUs dalam ±23 menit</li>
+      <li>Target Load: ${escapeHtml(targetLoad)}</li>
     </ul>
 
     <h3>Tujuan Pengujian</h3>
     <ul>
       <li>Memastikan workflow otomasi bulanan berjalan end-to-end.</li>
-      <li>Mengukur response time dummy API pada skenario stress test.</li>
+      <li>Mengukur response time dummy API pada skenario performance test.</li>
       <li>Memvalidasi pencatatan status 200, 429, dan 5xx.</li>
       <li>Memastikan HTML report, PDF report, artifact, dan email notification berhasil dibuat.</li>
     </ul>
@@ -185,31 +388,47 @@ async function main() {
     <h3>Hasil Pengujian</h3>
     <table>
       <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>Total Virtual Users (VUs)</td><td>${metric(summary, 'vus_max', 'max')} VUs</td></tr>
-      <tr><td>Total HTTP Requests</td><td>${totalRequests}</td></tr>
-      <tr><td>Requests per Second</td><td>${Number(rps).toFixed(2)} req/s</td></tr>
-      <tr><td>HTTP Success Rate</td><td>${pct(1 - failureRate)}</td></tr>
-      <tr><td>HTTP Failure Rate</td><td>${pct(failureRate)}</td></tr>
-      <tr><td>Status 200</td><td>${status200}</td></tr>
-      <tr><td>Status 429 Rate Limited</td><td>${status429}</td></tr>
-      <tr><td>Status 5xx Server Error</td><td>${status5xx}</td></tr>
-      <tr><td>Average Response Time</td><td>${Math.round(avgResponse)} ms</td></tr>
-      <tr><td>P95 Response Time</td><td>${Math.round(p95)} ms</td></tr>
-      <tr><td>Max Response Time</td><td>${Math.round(maxResponse)} ms</td></tr>
-      <tr><td>Data Received</td><td>${mb(metric(summary, 'data_received', 'count'))}</td></tr>
-      <tr><td>Data Sent</td><td>${mb(metric(summary, 'data_sent', 'count'))}</td></tr>
-      <tr><td>Avg Connection Time</td><td>${Math.round(metric(summary, 'http_req_connecting', 'avg'))} ms</td></tr>
-      <tr><td>Avg TLS Handshake</td><td>${Math.round(metric(summary, 'http_req_tls_handshaking', 'avg'))} ms</td></tr>
-      <tr><td>Avg Waiting Time</td><td>${Math.round(metric(summary, 'http_req_waiting', 'avg'))} ms</td></tr>
+      <tr><td>Total Virtual Users (VUs)</td><td>${formatNumber(metrics.totalVus)} VUs</td></tr>
+      <tr><td>Total HTTP Requests</td><td>${formatNumber(metrics.totalRequests)}</td></tr>
+      <tr><td>Requests per Second</td><td>${Number(metrics.requestsPerSecond || 0).toFixed(2)} req/s</td></tr>
+      <tr><td>HTTP Success Rate</td><td>${formatPercentFromRate(metrics.successRateRaw)}</td></tr>
+      <tr><td>HTTP Failure Rate</td><td>${formatPercentFromRate(metrics.failureRateRaw)}</td></tr>
+      <tr><td>Status 200</td><td>${formatNumber(metrics.status200)}</td></tr>
+      <tr><td>Status 429 Rate Limited</td><td>${formatNumber(metrics.status429)}</td></tr>
+      <tr><td>Status 5xx Server Error</td><td>${formatNumber(metrics.status5xx)}</td></tr>
+      <tr><td>Average Response Time</td><td>${formatMs(metrics.avgResponseTime)}</td></tr>
+      <tr><td>P95 Response Time</td><td>${formatMs(metrics.p95ResponseTime)}</td></tr>
+      <tr><td>Max Response Time</td><td>${formatMs(metrics.maxResponseTime)}</td></tr>
+      <tr><td>Data Received</td><td>${formatMB(metrics.dataReceived)}</td></tr>
+      <tr><td>Data Sent</td><td>${formatMB(metrics.dataSent)}</td></tr>
+      <tr><td>Avg Connection Time</td><td>${formatMs(metrics.avgConnectionTime)}</td></tr>
+      <tr><td>Avg TLS Handshake</td><td>${formatMs(metrics.avgTlsHandshake)}</td></tr>
+      <tr><td>Avg Waiting Time</td><td>${formatMs(metrics.avgWaitingTime)}</td></tr>
     </table>
 
     <h3>Insight dan Rekomendasi</h3>
     <table>
       <tr><th>Area</th><th>Status</th><th>Action</th></tr>
-      <tr><td>Server Stability</td><td>${escapeHtml(stabilityStatus)}</td><td>${status5xx === 0 ? 'Tidak ada tindakan khusus.' : 'Periksa log aplikasi dan resource server.'}</td></tr>
-      <tr><td>Latency</td><td>${escapeHtml(latencyStatus)}</td><td>${p95 < 6000 ? 'Tidak perlu optimasi pada dummy environment.' : 'Investigasi bottleneck aplikasi/server.'}</td></tr>
-      <tr><td>Rate Limiting</td><td>${escapeHtml(rateLimitStatus)}</td><td>Status 429 pada dummy API adalah expected behavior untuk simulasi proteksi login.</td></tr>
-      <tr><td>Automation Pipeline</td><td>Berjalan</td><td>Gunakan hasil ini sebagai baseline sebelum diarahkan ke production.</td></tr>
+      <tr>
+        <td>Server Stability</td>
+        <td>${escapeHtml(stabilityStatus)}</td>
+        <td>${metrics.status5xx === 0 ? "Tidak ada tindakan khusus." : "Periksa log aplikasi dan resource server."}</td>
+      </tr>
+      <tr>
+        <td>Latency</td>
+        <td>${escapeHtml(latencyStatus)}</td>
+        <td>${metrics.p95ResponseTime < 6000 ? "Tidak perlu optimasi pada dummy environment." : "Investigasi bottleneck aplikasi/server."}</td>
+      </tr>
+      <tr>
+        <td>Rate Limiting</td>
+        <td>${escapeHtml(rateLimitStatus)}</td>
+        <td>Status 429 pada dummy API adalah expected behavior untuk simulasi proteksi login.</td>
+      </tr>
+      <tr>
+        <td>Automation Pipeline</td>
+        <td>Berjalan</td>
+        <td>Gunakan hasil ini sebagai baseline sebelum diarahkan ke production.</td>
+      </tr>
     </table>
 
     <h3>Kesimpulan</h3>
@@ -218,22 +437,31 @@ async function main() {
 </body>
 </html>`;
 
-  const tempHtml = path.join(path.dirname(output), 'laporan-pekerjaan-ms-pbx.html');
+  const tempHtml = path.join(path.dirname(output), "laporan-pekerjaan-ms-pbx.html");
   fs.writeFileSync(tempHtml, html);
 
   const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   try {
     const page = await browser.newPage();
-    await page.goto(`file://${path.resolve(tempHtml)}`, { waitUntil: 'networkidle0' });
+
+    await page.goto(`file://${path.resolve(tempHtml)}`, {
+      waitUntil: "networkidle0",
+    });
+
     await page.pdf({
       path: output,
-      format: 'A4',
+      format: "A4",
       printBackground: true,
-      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
+      margin: {
+        top: "14mm",
+        right: "12mm",
+        bottom: "14mm",
+        left: "12mm",
+      },
     });
   } finally {
     await browser.close();
