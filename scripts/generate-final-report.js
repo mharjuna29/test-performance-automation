@@ -435,6 +435,7 @@ async function main() {
   const storagePath = getArg("storage");
   const optimizePath = getArg("optimize");
   const output = getArg("output");
+  const aiSummaryPath = getArg("ai-summary");
 
   if (!month || !summaryPath || !output) {
     console.error("Missing required args: --month, --summary, --output");
@@ -450,6 +451,17 @@ async function main() {
     console.error(error);
     summary = {};
   }
+
+  let aiSummary = null;
+
+try {
+  if (aiSummaryPath && fs.existsSync(aiSummaryPath)) {
+    aiSummary = JSON.parse(fs.readFileSync(aiSummaryPath, "utf8"));
+  }
+} catch (error) {
+  console.warn("Failed to read AI summary. Falling back to rule-based summary.");
+  aiSummary = null;
+}
 
   const htmlReport = readFileSafe(htmlReportPath);
   const metrics = buildMetrics(summary, htmlReport);
@@ -567,6 +579,12 @@ async function main() {
       <li>Memastikan HTML report, PDF report, artifact, dan email notification berhasil dibuat.</li>
     </ul>
 
+    ${
+  aiSummary?.executive_summary
+    ? `<h3>Executive Summary</h3><p>${escapeHtml(aiSummary.executive_summary)}</p>`
+    : ""
+}
+
     <h3>Hasil Pengujian</h3>
     <table>
       <tr><th>Metric</th><th>Value</th></tr>
@@ -590,19 +608,59 @@ async function main() {
     </table>
 
     <h3>Insight dan Rekomendasi</h3>
-<table>
-  <tr><th>Area</th><th>Status</th><th>Action</th></tr>
-  ${assessment.insights.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.area)}</td>
-      <td>${escapeHtml(item.status)}</td>
-      <td>${escapeHtml(item.action)}</td>
-    </tr>
-  `).join("")}
-</table>
+    <table>
+      ${
+        aiSummary?.insights?.length
+          ? `
+            <tr><th>Area</th><th>Status</th><th>Finding</th><th>Recommendation</th></tr>
+            ${aiSummary.insights.map((item) => `
+              <tr>
+                <td>${escapeHtml(item.area)}</td>
+                <td>${escapeHtml(item.status)}</td>
+                <td>${escapeHtml(item.finding)}</td>
+                <td>${escapeHtml(item.recommendation)}</td>
+              </tr>
+            `).join("")}
+          `
+          : `
+            <tr><th>Area</th><th>Status</th><th>Action</th></tr>
+            <tr>
+              <td>Server Stability</td>
+              <td>${escapeHtml(stabilityStatus)}</td>
+              <td>${metrics.status5xx === 0 ? "Tidak ada tindakan khusus." : "Periksa log aplikasi dan resource server."}</td>
+            </tr>
+            <tr>
+              <td>Latency</td>
+              <td>${escapeHtml(latencyStatus)}</td>
+              <td>${metrics.p95ResponseTime < 6000 ? "Tidak perlu optimasi pada dummy environment." : "Investigasi bottleneck aplikasi/server."}</td>
+            </tr>
+            <tr>
+              <td>Rate Limiting</td>
+              <td>${escapeHtml(rateLimitStatus)}</td>
+              <td>Status 429 pada dummy API adalah expected behavior untuk simulasi proteksi login.</td>
+            </tr>
+            <tr>
+              <td>Automation Pipeline</td>
+              <td>Berjalan</td>
+              <td>Gunakan hasil ini sebagai baseline sebelum diarahkan ke production.</td>
+            </tr>
+          `
+      }
+    </table>
+
+    ${
+      aiSummary?.risk_notes?.length
+        ? `
+          <h3>Risk Notes</h3>
+          <ul>
+            ${aiSummary.risk_notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}
+          </ul>
+        `
+        : ""
+    }
 
     <h3>Kesimpulan</h3>
-    <p>${escapeHtml(conclusion)}</p>
+    <p>${escapeHtml(aiSummary?.conclusion || conclusion)}</p>
   </section>
 </body>
 </html>`;

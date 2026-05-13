@@ -192,6 +192,14 @@ jobs:
           fi
           cp "$HTML_FILE" "reports/$MONTH/stress-test-summary.html"
 
+      - name: Generate AI summary
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          node scripts/generate-ai-summary.js \
+            --summary reports/$MONTH/k6-summary.json \
+            --output reports/$MONTH/ai-summary.json
+
       - name: Convert k6 HTML report to PDF
         if: steps.first_week.outputs.should_run == 'true'
         run: |
@@ -200,18 +208,17 @@ jobs:
             "reports/$MONTH/stress-test-summary.pdf"
 
       - name: Generate final monthly PDF report
-        if: steps.first_week.outputs.should_run == 'true'
         run: |
           node scripts/generate-final-report.js \
             --month "$MONTH" \
             --run-date "$RUN_DATE" \
-            --summary "reports/$MONTH/k6-summary.json" \
-            --html-report "reports/$MONTH/stress-test-summary.html" \
-            --k6-pdf "reports/$MONTH/stress-test-summary.pdf" \
-            --cpu-ram "reports/$MONTH/monitoring-cpu-ram.txt" \
-            --storage "reports/$MONTH/monitoring-storage.txt" \
-            --optimize "reports/$MONTH/optimize-storage.txt" \
-            --output "reports/$MONTH/laporan-pekerjaan-ms-pbx-$MONTH.pdf"
+            --summary reports/$MONTH/k6-summary.json \
+            --html-report reports/$MONTH/stress-test-summary.html \
+            --ai-summary reports/$MONTH/ai-summary.json \
+            --cpu-ram reports/$MONTH/monitoring-cpu-ram.txt \
+            --storage reports/$MONTH/monitoring-storage.txt \
+            --optimize reports/$MONTH/optimize-storage.txt \
+            --output reports/$MONTH/laporan-pekerjaan-ms-pbx-$MONTH.pdf
 
       - name: Upload report artifacts
         if: steps.first_week.outputs.should_run == 'true'
