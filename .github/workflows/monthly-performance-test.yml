@@ -1,0 +1,183 @@
+name: Monthly PBX Performance Test
+
+on:
+  schedule:
+    # Sunday 18:00 UTC = Monday 01:00 WIB.
+    # The first-week guard below ensures the workflow only continues on the first Monday window.
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+jobs:
+  performance-test:
+    runs-on: ubuntu-latest
+
+    env:
+      TZ: Asia/Jakarta
+      REPORT_RECIPIENTS: testerdeggan456@gmail.com
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+      DUMMY_API_PORT: ${{ secrets.DUMMY_API_PORT }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check first week of month
+        id: first_week
+        run: |
+          DAY=$(TZ=Asia/Jakarta date +%d)
+          DAY_NUM=$((10#$DAY))
+          echo "Current WIB day: $DAY_NUM"
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$DAY_NUM" -ge 1 ] && [ "$DAY_NUM" -le 7 ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not first week of month. Skipping without failure."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare report directory
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          MONTH=$(TZ=Asia/Jakarta date +"%Y-%m")
+          RUN_DATE=$(TZ=Asia/Jakarta date +"%Y-%m-%d_%H-%M-%S")
+          echo "MONTH=$MONTH" >> "$GITHUB_ENV"
+          echo "RUN_DATE=$RUN_DATE" >> "$GITHUB_ENV"
+          mkdir -p "reports/$MONTH"
+
+      - name: Setup Node.js
+        if: steps.first_week.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root dependencies
+        if: steps.first_week.outputs.should_run == 'true'
+        run: npm install
+
+      - name: Setup SSH key
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/testing_server_key
+          chmod 600 ~/.ssh/testing_server_key
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy and start dummy API on testing server
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          chmod +x scripts/deploy-dummy-api.sh
+          scripts/deploy-dummy-api.sh
+
+      - name: Monitor remote CPU RAM and storage
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          chmod +x scripts/monitor-remote-server.sh
+          scripts/monitor-remote-server.sh "reports/$MONTH"
+
+      - name: Optimize remote storage
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          chmod +x scripts/optimize-remote-storage.sh
+          scripts/optimize-remote-storage.sh "reports/$MONTH"
+
+      - name: Install k6
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          sudo gpg -k
+          curl -s https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt update
+          sudo apt install k6 -y
+
+      - name: Run k6 stress test to dummy server
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          BASE_URL="http://$SSH_HOST:$DUMMY_API_PORT" \
+          PBX_EMAIL="dummy@example.com" \
+          PBX_PASSWORD="password123" \
+          k6 run k6/pbx-stress-test.js \
+            --summary-export "reports/$MONTH/k6-summary.json" \
+            > "reports/$MONTH/k6-console-output.log"
+
+      - name: Move generated HTML report
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          HTML_FILE=$(ls -t stress-test-summary-*.html | head -n 1 || true)
+          if [ -z "$HTML_FILE" ]; then
+            echo "HTML report not found"
+            exit 1
+          fi
+          cp "$HTML_FILE" "reports/$MONTH/stress-test-summary.html"
+
+      - name: Convert k6 HTML report to PDF
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          node scripts/convert-html-to-pdf.js \
+            "reports/$MONTH/stress-test-summary.html" \
+            "reports/$MONTH/stress-test-summary.pdf"
+
+      - name: Generate final monthly PDF report
+        if: steps.first_week.outputs.should_run == 'true'
+        run: |
+          node scripts/generate-final-report.js \
+            --month "$MONTH" \
+            --run-date "$RUN_DATE" \
+            --summary "reports/$MONTH/k6-summary.json" \
+            --html-report "reports/$MONTH/stress-test-summary.html" \
+            --k6-pdf "reports/$MONTH/stress-test-summary.pdf" \
+            --cpu-ram "reports/$MONTH/monitoring-cpu-ram.txt" \
+            --storage "reports/$MONTH/monitoring-storage.txt" \
+            --optimize "reports/$MONTH/optimize-storage.txt" \
+            --output "reports/$MONTH/laporan-pekerjaan-ms-pbx-$MONTH.pdf"
+
+      - name: Upload report artifacts
+        if: steps.first_week.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: laporan-performance-pbx-${{ env.MONTH }}
+          path: reports/${{ env.MONTH }}/
+
+      - name: Send success email
+        if: steps.first_week.outputs.should_run == 'true' && success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: SUCCESS - Monthly PBX Performance Test ${{ env.MONTH }}
+          to: testerdeggan456@gmail.com
+          from: ${{ secrets.SMTP_FROM }}
+          body: |
+            Monthly PBX Performance Test selesai tanpa kendala.
+
+            Periode: ${{ env.MONTH }}
+            Target: Dummy website pada server testing via SSH
+            Jadwal: Minggu pertama setiap bulan pukul 01:00 WIB
+
+            Laporan PDF terlampir dan artifact tersedia di GitHub Actions.
+          attachments: reports/${{ env.MONTH }}/laporan-pekerjaan-ms-pbx-${{ env.MONTH }}.pdf
+
+      - name: Send failure email
+        if: steps.first_week.outputs.should_run == 'true' && failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: FAILED - Monthly PBX Performance Test ${{ env.MONTH }}
+          to: testerdeggan456@gmail.com
+          from: ${{ secrets.SMTP_FROM }}
+          body: |
+            Monthly PBX Performance Test gagal dijalankan.
+
+            Periode: ${{ env.MONTH }}
+            Silakan cek log GitHub Actions untuk detail error.

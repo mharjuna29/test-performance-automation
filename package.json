@@ -1,0 +1,12 @@
+{
+  "name": "pbx-performance-automation",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "pdf:convert": "node scripts/convert-html-to-pdf.js",
+    "report:generate": "node scripts/generate-final-report.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}
