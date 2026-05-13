@@ -9,21 +9,52 @@ const status429 = new Counter('status_429');
 const status500 = new Counter('status_500');
 const statusOther = new Counter('status_other');
 
-export const options = {
-  stages: [
-    { duration: '2m', target: 100 },
-    { duration: '5m', target: 100 },
-    { duration: '2m', target: 200 },
-    { duration: '5m', target: 200 },
-    { duration: '2m', target: 300 },
-    { duration: '5m', target: 300 },
-    { duration: '2m', target: 0 },
+const TEST_PROFILE = __ENV.TEST_PROFILE || 'dummy';
+
+const stagebyProfile = {
+    dummy: [
+    { duration: "10s", target: 5 },
+    { duration: "20s", target: 5 },
+    { duration: "10s", target: 10 },
+    { duration: "20s", target: 10 },
+    { duration: "10s", target: 0 },
   ],
+
+    production: [
+    { duration: "2m", target: 100 },
+    { duration: "5m", target: 100 },
+    { duration: "2m", target: 200 },
+    { duration: "5m", target: 200 },
+    { duration: "2m", target: 300 },
+    { duration: "5m", target: 300 },
+    { duration: "2m", target: 0 },
+  ],
+};
+
+export let options = {
+  stages: stagesByProfile[TEST_PROFILE] || stagesByProfile.dummy,
+
   thresholds: {
-    http_req_duration: ['p(95)<6000'],
-    status_500: ['count==0'],
+    http_req_duration: ["p(95)<6000"],
+    status_500: ["count==0"],
   },
 };
+
+// export const options = {
+//   stages: [
+//     { duration: '2m', target: 100 },
+//     { duration: '5m', target: 100 },
+//     { duration: '2m', target: 200 },
+//     { duration: '5m', target: 200 },
+//     { duration: '2m', target: 300 },
+//     { duration: '5m', target: 300 },
+//     { duration: '2m', target: 0 },
+//   ],
+//   thresholds: {
+//     http_req_duration: ['p(95)<6000'],
+//     status_500: ['count==0'],
+//   },
+// };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 
@@ -108,6 +139,9 @@ export function handleSummary(data) {
   const status5xx = metricValue(data, 'status_500', 'count');
   const status429Count = metricValue(data, 'status_429', 'count');
   const status200Count = metricValue(data, 'status_200', 'count');
+  const testStages = options.stages.map((stage) => {
+  return `${stage.target} VUs (${stage.duration})`;
+});
 
   const thresholdStatus = {
     'P95 Response Time < 6s': p95 < 6000 ? 'PASS' : 'FAIL',

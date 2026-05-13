@@ -110,6 +110,18 @@ jobs:
           chmod +x scripts/deploy-dummy-api.sh
           scripts/deploy-dummy-api.sh
 
+      - name: Check remote dummy API status
+        run: |
+          ssh -i ~/.ssh/testing_server_key -p "$SSH_PORT" "$SSH_USERNAME@$SSH_HOST" "
+            echo 'Checking process...'
+            ps aux | grep 'node server.js' | grep -v grep || true
+
+            echo 'Checking local health...'
+            curl -f http://127.0.0.1:$DUMMY_API_PORT/health
+
+            echo 'Last dummy API logs...'
+            tail -50 /opt/pbx-dummy-api/dummy-api.log || true"          
+
       - name: Monitor remote CPU RAM and storage
         if: steps.first_week.outputs.should_run == 'true'
         run: |
@@ -134,11 +146,14 @@ jobs:
       - name: Create SSH tunnel to dummy API
         run: |
           echo "Creating SSH tunnel..."
-          
+
           nohup ssh \
             -i ~/.ssh/testing_server_key \
             -p "$SSH_PORT" \
             -N \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
             -L 3000:127.0.0.1:$DUMMY_API_PORT \
             "$SSH_USERNAME@$SSH_HOST" \
             > reports/$MONTH/ssh-tunnel.log 2>&1 &
@@ -153,6 +168,7 @@ jobs:
       - name: Run k6 stress test to dummy server
         run: |
           BASE_URL="http://127.0.0.1:3000" \
+          TEST_PROFILE="dummy" \
           PBX_EMAIL="dummy@example.com" \
           PBX_PASSWORD="password123" \
           k6 run k6/pbx-stress-test.js \
