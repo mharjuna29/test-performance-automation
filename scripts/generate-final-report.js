@@ -154,29 +154,29 @@ function buildMetrics(summary, htmlReport) {
   const avgTlsHandshake = getMetric(summary, "http_req_tls_handshaking", "avg", 0);
   const avgWaitingTime = getMetric(summary, "http_req_waiting", "avg", 0);
 
-let finalStatus200 = status200;
-let finalStatus429 = status429;
-let finalStatus5xx = status5xx;
-let finalStatusOther = getMetric(summary, "status_other", "count", 0);
+  let finalStatus200 = status200;
+  let finalStatus429 = status429;
+  let finalStatus5xx = status5xx;
+  let finalStatusOther = getMetric(summary, "status_other", "count", 0);
 
-const hasNoStatusBreakdown =
-  finalStatus200 === 0 &&
-  finalStatus429 === 0 &&
-  finalStatus5xx === 0 &&
-  finalStatusOther === 0 &&
-  totalRequests > 0;
+  const hasNoStatusBreakdown =
+    finalStatus200 === 0 &&
+    finalStatus429 === 0 &&
+    finalStatus5xx === 0 &&
+    finalStatusOther === 0 &&
+    totalRequests > 0;
 
-if (hasNoStatusBreakdown) {
-  const estimatedSuccess = Math.round(totalRequests * successRateRaw);
-  const estimatedFailure = Math.max(totalRequests - estimatedSuccess, 0);
+  if (hasNoStatusBreakdown) {
+    const estimatedSuccess = Math.round(totalRequests * successRateRaw);
+    const estimatedFailure = Math.max(totalRequests - estimatedSuccess, 0);
 
-  finalStatus200 = estimatedSuccess;
+    finalStatus200 = estimatedSuccess;
 
-  // Untuk dummy API, failure yang diharapkan mayoritas adalah 429 rate limited
-  finalStatus429 = estimatedFailure;
-  finalStatus5xx = 0;
-  finalStatusOther = 0;
-}
+    // Untuk dummy API, failure yang diharapkan mayoritas adalah 429 rate limited
+    finalStatus429 = estimatedFailure;
+    finalStatus5xx = 0;
+    finalStatusOther = 0;
+  }
 
   const parsed = {
     totalVus,
@@ -279,6 +279,153 @@ function getProfileFromSummary(summary) {
   return "production";
 }
 
+function buildDynamicAssessment(metrics) {
+  const insights = [];
+
+  const totalRequests = Number(metrics.totalRequests || 0);
+  const successRate = normalizeRate(metrics.successRateRaw) * 100;
+  const failureRate = normalizeRate(metrics.failureRateRaw) * 100;
+  const p95 = Number(metrics.p95ResponseTime || 0);
+  const maxResponse = Number(metrics.maxResponseTime || 0);
+
+  const status200 = Number(metrics.status200 || 0);
+  const status429 = Number(metrics.status429 || 0);
+  const status5xx = Number(metrics.status5xx || 0);
+  const statusOther = Number(metrics.statusOther || 0);
+
+  let stabilityStatus = "Stabil";
+  let stabilityAction = "Tidak ada server error 5xx yang terdeteksi.";
+
+  if (status5xx > 0) {
+    stabilityStatus = "Perlu Investigasi";
+    stabilityAction = "Terdapat server error 5xx. Periksa log aplikasi, error backend, dan resource server.";
+  }
+
+  let latencyStatus = "Dalam batas wajar";
+  let latencyAction = "Response time masih dalam batas aman untuk dummy environment.";
+
+  if (p95 === 0) {
+    latencyStatus = "Tidak Terdeteksi";
+    latencyAction = "Metric P95 tidak tersedia. Periksa apakah summary k6 terbaca dengan benar.";
+  } else if (p95 < 1000) {
+    latencyStatus = "Sangat Baik";
+    latencyAction = "P95 response time di bawah 1 detik. Tidak diperlukan optimasi latency.";
+  } else if (p95 < 3000) {
+    latencyStatus = "Normal";
+    latencyAction = "Latency masih normal, namun tetap pantau jika beban dinaikkan.";
+  } else if (p95 < 6000) {
+    latencyStatus = "Perlu Dipantau";
+    latencyAction = "P95 mendekati batas threshold. Lakukan observasi pada test berikutnya.";
+  } else {
+    latencyStatus = "Melebihi Threshold";
+    latencyAction = "P95 melebihi 6 detik. Perlu investigasi bottleneck aplikasi, jaringan, atau server.";
+  }
+
+  let rateLimitStatus = "Tidak Terdeteksi";
+  let rateLimitAction = "Status 429 tidak muncul. Jika dummy API memang didesain menghasilkan rate limit, periksa pencatatan custom counter k6.";
+
+  if (status429 > 0) {
+    rateLimitStatus = "Aktif";
+    rateLimitAction = "Status 429 terdeteksi. Mekanisme rate limiting berjalan sesuai simulasi proteksi login.";
+  } else if (failureRate > 50 && status5xx === 0 && statusOther === 0) {
+    rateLimitStatus = "Belum Terkonfirmasi";
+    rateLimitAction = "Failure rate tinggi, tetapi status 429 tidak tercatat. Periksa mapping counter status_429 atau response dari dummy API.";
+  } else if (failureRate <= 20) {
+    rateLimitStatus = "Rendah / Tidak Dominan";
+    rateLimitAction = "Failure rate rendah. Rate limiting tidak menjadi pola dominan pada pengujian ini.";
+  }
+
+  let statusBreakdownStatus = "Tercatat";
+  let statusBreakdownAction = "Breakdown status HTTP berhasil tercatat.";
+
+  if (totalRequests > 0 && status200 === 0 && status429 === 0 && status5xx === 0 && statusOther === 0) {
+    statusBreakdownStatus = "Tidak Lengkap";
+    statusBreakdownAction = "Total request tercatat, namun breakdown status HTTP masih 0. Perlu cek custom counter status_200, status_429, status_500, dan status_other di script k6.";
+  }
+
+  let throughputStatus = "Normal";
+  let throughputAction = "Throughput berhasil tercatat dan dapat digunakan sebagai baseline dummy test.";
+
+  if (totalRequests === 0) {
+    throughputStatus = "Tidak Valid";
+    throughputAction = "Tidak ada HTTP request tercatat. Pengujian perlu diulang.";
+  } else if (metrics.requestsPerSecond > 100) {
+    throughputStatus = "Tinggi untuk Dummy";
+    throughputAction = "RPS cukup tinggi untuk dummy environment. Pastikan hasil tidak bias karena test berjalan via localhost/SSH tunnel.";
+  }
+
+  insights.push({
+    area: "Server Stability",
+    status: stabilityStatus,
+    action: stabilityAction,
+  });
+
+  insights.push({
+    area: "Latency",
+    status: latencyStatus,
+    action: latencyAction,
+  });
+
+  insights.push({
+    area: "Rate Limiting",
+    status: rateLimitStatus,
+    action: rateLimitAction,
+  });
+
+  insights.push({
+    area: "Status Code Breakdown",
+    status: statusBreakdownStatus,
+    action: statusBreakdownAction,
+  });
+
+  insights.push({
+    area: "Throughput",
+    status: throughputStatus,
+    action: throughputAction,
+  });
+
+  const conclusionParts = [];
+
+  if (totalRequests > 0) {
+    conclusionParts.push(
+      `Pengujian performance berhasil berjalan dengan total ${formatNumber(totalRequests)} HTTP request dan peak load ${formatNumber(metrics.totalVus)} VUs.`
+    );
+  } else {
+    conclusionParts.push(
+      "Pengujian performance belum menghasilkan request yang valid sehingga hasil belum dapat dijadikan baseline."
+    );
+  }
+
+  if (status5xx === 0) {
+    conclusionParts.push("Tidak ditemukan server error 5xx, sehingga sistem dinilai stabil dari sisi server error.");
+  } else {
+    conclusionParts.push(`Terdapat ${formatNumber(status5xx)} server error 5xx sehingga perlu investigasi lebih lanjut.`);
+  }
+
+  if (p95 > 0 && p95 < 1000) {
+    conclusionParts.push(`P95 response time sebesar ${formatMs(p95)} menunjukkan performa latency sangat baik.`);
+  } else if (p95 >= 1000 && p95 < 6000) {
+    conclusionParts.push(`P95 response time sebesar ${formatMs(p95)} masih berada dalam batas threshold.`);
+  } else if (p95 >= 6000) {
+    conclusionParts.push(`P95 response time sebesar ${formatMs(p95)} melebihi threshold dan perlu optimasi.`);
+  }
+
+  if (status429 > 0) {
+    conclusionParts.push(`Rate limiting terdeteksi melalui ${formatNumber(status429)} response 429, sesuai skenario proteksi login.`);
+  } else if (failureRate > 50) {
+    conclusionParts.push(
+      `Failure rate sebesar ${Math.round(failureRate)}% cukup tinggi, namun status 429 belum tercatat. Perlu validasi ulang custom counter k6 agar penyebab failure dapat diklasifikasikan dengan akurat.`
+    );
+  } else {
+    conclusionParts.push("Failure rate masih rendah dan tidak menunjukkan pola rate limiting yang dominan.");
+  }
+
+  return {
+    insights,
+    conclusion: conclusionParts.join(" "),
+  };
+}
+
 async function main() {
   const month = getArg("month");
   const runDate = getArg("run-date", new Date().toISOString());
@@ -311,20 +458,13 @@ async function main() {
   console.log("Available k6 metrics:", Object.keys(summary.metrics || {}));
   console.log("Parsed report metrics:", metrics);
 
-  const stabilityStatus = metrics.status5xx === 0 ? "Stabil" : "Perlu Investigasi";
-  const latencyStatus = metrics.p95ResponseTime < 6000 ? "Dalam batas wajar" : "Melebihi batas";
-  const rateLimitStatus =
-    metrics.status429 > 0 ? "Rate limiting aktif" : "Rate limiting tidak terdeteksi";
+  const assessment = buildDynamicAssessment(metrics);
+  const conclusion = assessment.conclusion;
 
   const targetLoad =
     profile === "dummy"
       ? "0 → 5 → 10 → 0 VUs dalam ±70 detik"
       : "0 → 100 → 200 → 300 → 0 VUs dalam ±23 menit";
-
-  const conclusion =
-    metrics.status5xx === 0 && metrics.p95ResponseTime < 6000
-      ? "Pengujian performance berhasil dijalankan. Sistem dummy tetap merespons tanpa server error 5xx, dan mekanisme rate limiting berhasil disimulasikan melalui status 429. Hasil ini menunjukkan pipeline automation, monitoring, report generation, dan email notification sudah berjalan sesuai rancangan."
-      : "Pengujian performance selesai, namun terdapat metrik yang perlu ditinjau lebih lanjut. Tim perlu memeriksa response time, error 5xx, dan log server sebelum workflow digunakan untuk target production.";
 
   const html = `<!DOCTYPE html>
 <html>
@@ -450,29 +590,16 @@ async function main() {
     </table>
 
     <h3>Insight dan Rekomendasi</h3>
-    <table>
-      <tr><th>Area</th><th>Status</th><th>Action</th></tr>
-      <tr>
-        <td>Server Stability</td>
-        <td>${escapeHtml(stabilityStatus)}</td>
-        <td>${metrics.status5xx === 0 ? "Tidak ada tindakan khusus." : "Periksa log aplikasi dan resource server."}</td>
-      </tr>
-      <tr>
-        <td>Latency</td>
-        <td>${escapeHtml(latencyStatus)}</td>
-        <td>${metrics.p95ResponseTime < 6000 ? "Tidak perlu optimasi pada dummy environment." : "Investigasi bottleneck aplikasi/server."}</td>
-      </tr>
-      <tr>
-        <td>Rate Limiting</td>
-        <td>${escapeHtml(rateLimitStatus)}</td>
-        <td>Status 429 pada dummy API adalah expected behavior untuk simulasi proteksi login.</td>
-      </tr>
-      <tr>
-        <td>Automation Pipeline</td>
-        <td>Berjalan</td>
-        <td>Gunakan hasil ini sebagai baseline sebelum diarahkan ke production.</td>
-      </tr>
-    </table>
+<table>
+  <tr><th>Area</th><th>Status</th><th>Action</th></tr>
+  ${assessment.insights.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.area)}</td>
+      <td>${escapeHtml(item.status)}</td>
+      <td>${escapeHtml(item.action)}</td>
+    </tr>
+  `).join("")}
+</table>
 
     <h3>Kesimpulan</h3>
     <p>${escapeHtml(conclusion)}</p>
