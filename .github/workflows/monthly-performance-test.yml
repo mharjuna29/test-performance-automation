@@ -131,15 +131,40 @@ jobs:
           sudo apt update
           sudo apt install k6 -y
 
-      - name: Run k6 stress test to dummy server
-        if: steps.first_week.outputs.should_run == 'true'
+      - name: Create SSH tunnel to dummy API
         run: |
-          BASE_URL="http://$SSH_HOST:$DUMMY_API_PORT" \
+          echo "Creating SSH tunnel..."
+          
+          nohup ssh \
+            -i ~/.ssh/testing_server_key \
+            -p "$SSH_PORT" \
+            -N \
+            -L 3000:127.0.0.1:$DUMMY_API_PORT \
+            "$SSH_USERNAME@$SSH_HOST" \
+            > reports/$MONTH/ssh-tunnel.log 2>&1 &
+
+          echo $! > reports/$MONTH/ssh-tunnel.pid
+
+          sleep 5
+
+          echo "Checking dummy API through SSH tunnel..."
+          curl -f http://127.0.0.1:3000/health
+
+      - name: Run k6 stress test to dummy server
+        run: |
+          BASE_URL="http://127.0.0.1:3000" \
           PBX_EMAIL="dummy@example.com" \
           PBX_PASSWORD="password123" \
           k6 run k6/pbx-stress-test.js \
-            --summary-export "reports/$MONTH/k6-summary.json" \
-            > "reports/$MONTH/k6-console-output.log"
+            --summary-export reports/$MONTH/k6-summary.json \
+            > reports/$MONTH/k6-console-output.log
+
+      - name: Stop SSH tunnel
+        if: always()
+        run: |
+          if [ -f "reports/$MONTH/ssh-tunnel.pid" ]; then
+            kill "$(cat reports/$MONTH/ssh-tunnel.pid)" || true
+          fi
 
       - name: Move generated HTML report
         if: steps.first_week.outputs.should_run == 'true'
