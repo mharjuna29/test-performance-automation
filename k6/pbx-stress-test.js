@@ -11,7 +11,7 @@ const statusOther = new Counter('status_other');
 
 const TEST_PROFILE = __ENV.TEST_PROFILE || 'dummy';
 
-const stagebyProfile = {
+const stagesByProfile = {
     dummy: [
     { duration: "10s", target: 5 },
     { duration: "20s", target: 5 },
