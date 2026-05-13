@@ -57,7 +57,7 @@ function normalizeRate(value) {
 }
 
 function formatRate(value) {
-  return `${(normalizeRate(value) * 100).toFixed(2)}%`;
+  return `${Math.round(normalizeRate(value) * 100)}%`;
 }
 
 /**
@@ -179,26 +179,26 @@ if (hasNoStatusBreakdown) {
 }
 
   const parsed = {
-  totalVus,
-  totalRequests,
-  requestsPerSecond,
-  successRateRaw,
-  failureRateRaw,
+    totalVus,
+    totalRequests,
+    requestsPerSecond,
+    successRateRaw,
+    failureRateRaw,
 
-  status200: finalStatus200,
-  status429: finalStatus429,
-  status5xx: finalStatus5xx,
-  statusOther: finalStatusOther,
+    status200: finalStatus200,
+    status429: finalStatus429,
+    status5xx: finalStatus5xx,
+    statusOther: finalStatusOther,
 
-  avgResponseTime,
-  p95ResponseTime,
-  maxResponseTime,
-  dataReceived,
-  dataSent,
-  avgConnectionTime,
-  avgTlsHandshake,
-  avgWaitingTime,
-};
+    avgResponseTime,
+    p95ResponseTime,
+    maxResponseTime,
+    dataReceived,
+    dataSent,
+    avgConnectionTime,
+    avgTlsHandshake,
+    avgWaitingTime,
+  };
 
   /**
    * Jika summary JSON tidak terbaca dengan benar, fallback ke HTML report.
@@ -249,8 +249,8 @@ if (hasNoStatusBreakdown) {
     totalRequests: fallbackTotalRequests,
     requestsPerSecond: parseNumberFromText(htmlRps),
 
-    successRateRaw: fallbackSuccessPercent / 100,
-    failureRateRaw: fallbackFailurePercent / 100,
+    successRateRaw: normalizeRate(fallbackSuccessPercent),
+    failureRateRaw: normalizeRate(fallbackFailurePercent),
 
     status200: parseNumberFromText(htmlStatus200),
     status429: parseNumberFromText(htmlStatus429),
@@ -432,7 +432,7 @@ async function main() {
       <tr><th>Metric</th><th>Value</th></tr>
       <tr><td>Total Virtual Users (VUs)</td><td>${formatNumber(metrics.totalVus)} VUs</td></tr>
       <tr><td>Total HTTP Requests</td><td>${formatNumber(metrics.totalRequests)}</td></tr>
-      <tr><td>Requests per Second</td><td>${Number(metrics.requestsPerSecond || 0).toFixed(2)} req/s</td></tr>
+      <tr><td>Requests per Second</td><td>${Math.round(Number(metrics.requestsPerSecond || 0))} req/s</td></tr>
       <tr><td>HTTP Success Rate</td><td>${formatRate(metrics.successRateRaw)}</td></tr>
       <tr><td>HTTP Failure Rate</td><td>${formatRate(metrics.failureRateRaw)}</td></tr>
       <tr><td>Status 200</td><td>${formatNumber(metrics.status200)}</td></tr>

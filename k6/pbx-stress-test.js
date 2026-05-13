@@ -7,7 +7,7 @@ const loginFailure = new Counter('login_failure');
 const status200 = new Counter('status_200');
 const status429 = new Counter('status_429');
 const status500 = new Counter('status_500');
-const statusOther = new Counter('status_other'); 
+const statusOther = new Counter('status_other');
 
 const TEST_PROFILE = __ENV.TEST_PROFILE || 'dummy';
 
@@ -95,53 +95,28 @@ export default function () {
     },
   });
 
-  // switch (response.status) {
-  //   case 200:
-  //     status200.add(1);
-  //     break;
-  //   case 429:
-  //     status429.add(1);
-  //     break;
-  //   case 500:
-  //   case 502:
-  //   case 503:
-  //   case 504:
-  //     status500.add(1);
-  //     break;
-  //   default:
-  //     statusOther.add(1);
-  // }
-
-  if (response.status === 200 && isSuccess) {
-    loginSuccess.add(1);
-  } else {
-    loginFailure.add(1);
-  }
-  
-  if (response && response.status) {
   switch (response.status) {
     case 200:
       status200.add(1);
       break;
-
     case 429:
       status429.add(1);
       break;
-
     case 500:
     case 502:
     case 503:
     case 504:
       status500.add(1);
       break;
-
     default:
       statusOther.add(1);
-      break;
   }
-} else {
-  statusOther.add(1);
-}
+
+  if (response.status === 200 && isSuccess) {
+    loginSuccess.add(1);
+  } else {
+    loginFailure.add(1);
+  }
 
   sleep(Math.random() * 3 + 2);
 }
@@ -189,8 +164,8 @@ export function handleSummary(data) {
       'P99 Response Time': `${Math.round(metricValue(data, 'http_req_duration', 'p(99)'))}ms`,
     },
     'Success/Failure Rates': {
-      'HTTP Success Rate': `${((1 - httpFailedRate) * 100).toFixed(2)}%`,
-      'HTTP Failure Rate': `${(httpFailedRate * 100).toFixed(2)}%`,
+      'HTTP Success Rate': `${Math.round((1 - httpFailedRate) * 100)}%`,
+      'HTTP Failure Rate': `${Math.round(httpFailedRate * 100)}%`,
       'Login Successes': metricValue(data, 'login_success', 'count'),
       'Login Failures': metricValue(data, 'login_failure', 'count'),
     },
@@ -231,7 +206,7 @@ export function handleSummary(data) {
   <div class="section">
     <h2>Test Status</h2>
     <div class="metric"><span>Target URL:</span><span class="value">${BASE_URL}</span></div>
-    <div class="metric"><span>Test Stages:</span><span class="value">0 → 100 → 200 → 300 → 0 VUs</span></div>
+    <div class="metric"><span>Test Stages:</span><span class="value">${testStages.join(' → ')}</span></div>
     ${Object.entries(thresholdStatus).map(([key, status]) => `<div class="metric"><span>${key}:</span><span class="${status === 'PASS' ? 'status-pass' : status === 'FAIL' ? 'status-fail' : 'status-warning'}">${status}</span></div>`).join('')}
   </div>
   <div class="section">
@@ -240,7 +215,7 @@ export function handleSummary(data) {
     <div class="metric"><span>Status 429:</span><span class="value warning">${status429Count}</span></div>
     <div class="metric"><span>Status 5xx:</span><span class="value danger">${status5xx}</span></div>
     <div class="metric"><span>Other Status Codes:</span><span class="value">${metricValue(data, 'status_other', 'count')}</span></div>
-    <div class="metric"><span>Success Rate 200:</span><span class="value success">${((status200Count / (totalRequests || 1)) * 100).toFixed(2)}%</span></div>
+    <div class="metric"><span>Success Rate 200:</span><span class="value success">${Math.round((status200Count / (totalRequests || 1)) * 100)}%</span></div>
   </div>
   ${Object.entries(summary).map(([category, metrics]) => `<div class="section"><h2>${category}</h2>${Object.entries(metrics).map(([key, value]) => `<div class="metric"><span>${key}:</span><span class="value">${value}</span></div>`).join('')}</div>`).join('')}
 </body>
