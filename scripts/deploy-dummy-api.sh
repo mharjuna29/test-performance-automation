@@ -1,61 +1,41 @@
 #!/bin/bash
 
-set -e
+# Configuration
+SSH_USER="tester"
+SSH_HOST="139.162.3.156"
+SSH_KEY="/tmp/deploy_key"
+# UBAH DARI /opt KE /home/tester
+REMOTE_DIR="/home/tester/pbx-dummy-api"
 
-SSH_KEY="$HOME/.ssh/tester-pbx-key"
-REMOTE_DIR="/opt/pbx-dummy-api"
-PID_FILE="$REMOTE_DIR/dummy-api.pid"
+echo "🚀 Deploying Dummy API to ${SSH_USER}@${SSH_HOST}"
 
-echo "Deploying dummy API to testing server..."
+# Create remote directory
+# Tambahkan -p agar tidak error jika folder sudah ada
+ssh -i $SSH_KEY -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_DIR}"
 
-echo "Creating remote directory..."
-ssh -i "$SSH_KEY" -p "$SSH_PORT" "$SSH_USERNAME@$SSH_HOST" "
-  mkdir -p $REMOTE_DIR
-"
+# Copy files
+scp -i $SSH_KEY -o StrictHostKeyChecking=no dummy-api/package.json ${SSH_USER}@${SSH_HOST}:${REMOTE_DIR}/
+scp -i $SSH_KEY -o StrictHostKeyChecking=no dummy-api/server.js ${SSH_USER}@${SSH_HOST}:${REMOTE_DIR}/
 
-echo "Copying dummy API files..."
-scp -i "$SSH_KEY" -P "$SSH_PORT" -r dummy-api/* "$SSH_USERNAME@$SSH_HOST:$REMOTE_DIR/"
+# Install dependencies and start application
+ssh -i $SSH_KEY -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'ENDSSH'
+# Masuk ke folder yang benar
+cd /home/tester/pbx-dummy-api
 
-echo "Installing dependencies and starting dummy API..."
-ssh -i "$SSH_KEY" -p "$SSH_PORT" "$SSH_USERNAME@$SSH_HOST" "
-  set -e
+# Install dependencies
+npm install --production
 
-  cd $REMOTE_DIR
+# Stop aplikasi lama jika ada (ignore error jika belum ada)
+pm2 delete dummy-pbx-api 2>/dev/null || true
 
-  echo 'Checking Node.js...'
-  node -v
-  npm -v
+# Start aplikasi baru
+pm2 start server.js --name dummy-pbx-api
 
-  echo 'Installing npm dependencies...'
-  npm install
+# Simpan daftar proses agar auto-restart saat reboot
+pm2 save
 
-  echo 'Stopping previous dummy API process if exists...'
-  if [ -f '$PID_FILE' ]; then
-    OLD_PID=\$(cat '$PID_FILE' || true)
+# Setup startup script (hanya perlu dijalankan sekali, tapi aman jika dijalankan ulang)
+pm2 startup 2>/dev/null || true
+ENDSSH
 
-    if [ -n \"\$OLD_PID\" ] && kill -0 \"\$OLD_PID\" 2>/dev/null; then
-      echo \"Stopping old process with PID \$OLD_PID\"
-      kill \"\$OLD_PID\" || true
-      sleep 2
-    fi
-
-    rm -f '$PID_FILE'
-  fi
-
-  echo 'Starting dummy API...'
-  PORT=$DUMMY_API_PORT nohup node server.js > dummy-api.log 2>&1 &
-
-  NEW_PID=\$!
-  echo \$NEW_PID > '$PID_FILE'
-
-  echo \"Dummy API started with PID \$NEW_PID\"
-
-  sleep 5
-
-  echo 'Checking dummy API health locally...'
-  curl -f http://localhost:$DUMMY_API_PORT/health
-
-  echo 'Dummy API deployment completed successfully.'
-"
-
-echo "Dummy API deployed and running."
+echo "✅ Deployment completed successfully to ${REMOTE_DIR}"
