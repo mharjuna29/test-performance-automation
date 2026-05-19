@@ -2,7 +2,7 @@
 set -euo pipefail
 
 OUTPUT_DIR="$1"
-SSH_KEY="$HOME/.ssh/testing_server_key"
+SSH_KEY="$HOME/.ssh/tester-pbx-key"
 mkdir -p "$OUTPUT_DIR"
 
 : "${SSH_HOST:?SSH_HOST is required}"

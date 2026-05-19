@@ -100,8 +100,8 @@ jobs:
         if: steps.first_week.outputs.should_run == 'true'
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/testing_server_key
-          chmod 600 ~/.ssh/testing_server_key
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/tester-pbx-key
+          chmod 600 ~/.ssh/tester-pbx-key
           ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy and start dummy API on testing server
@@ -112,7 +112,7 @@ jobs:
 
       - name: Check remote dummy API status
         run: |
-          ssh -i ~/.ssh/testing_server_key -p "$SSH_PORT" "$SSH_USERNAME@$SSH_HOST" "
+          ssh -i ~/.ssh/tester-pbx-key -p "$SSH_PORT" "$SSH_USERNAME@$SSH_HOST" "
             echo 'Checking process...'
             ps aux | grep 'node server.js' | grep -v grep || true
 
@@ -148,7 +148,7 @@ jobs:
           echo "Creating SSH tunnel..."
 
           nohup ssh \
-            -i ~/.ssh/testing_server_key \
+            -i ~/.ssh/tester-pbx-key \
             -p "$SSH_PORT" \
             -N \
             -o ExitOnForwardFailure=yes \

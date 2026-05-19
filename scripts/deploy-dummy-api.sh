@@ -2,7 +2,7 @@
 
 set -e
 
-SSH_KEY="$HOME/.ssh/testing_server_key"
+SSH_KEY="$HOME/.ssh/tester-pbx-key"
 REMOTE_DIR="/opt/pbx-dummy-api"
 PID_FILE="$REMOTE_DIR/dummy-api.pid"
 
